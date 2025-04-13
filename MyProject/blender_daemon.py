@@ -3,6 +3,7 @@ import os
 import time
 import math
 import mathutils
+import errno
 
 base_path = os.path.dirname(__file__)
 config_path = os.path.join(base_path, "material_config.txt")
@@ -13,12 +14,32 @@ preview_model_dir = os.path.join(base_path, "preview_model")
 model_info_path = os.path.join(preview_model_dir, "model.txt")
 camera_config_path = os.path.join(base_path, "camera_config.txt")
 
+
+def safe_remove(path, retries=5, delay=0.1):
+    for _ in range(retries):
+        try:
+            os.remove(path)
+            return True
+        except PermissionError as e:
+            if e.errno == errno.EACCES:
+                time.sleep(delay)
+            else:
+                raise
+    print(f"⚠️ Could not remove {path} after {retries} attempts.")
+    return False
+
+
 def apply_material_settings(bsdf):
     with open(config_path, "r") as f:
-        r, g, b, rough, metal = map(float, f.read().strip().split(","))
-    bsdf.inputs["Base Color"].default_value = (r, g, b, 1)
-    bsdf.inputs["Roughness"].default_value = rough
-    bsdf.inputs["Metallic"].default_value = metal
+        line = f.read().strip()
+        try:
+            r, g, b, rough, metal = map(float, line.split(","))
+            bsdf.inputs["Base Color"].default_value = (r, g, b, 1)
+            bsdf.inputs["Roughness"].default_value = rough
+            bsdf.inputs["Metallic"].default_value = metal
+        except ValueError:
+            print(f"❌ Invalid material config: {line}")
+
 
 def frame_camera_and_light(obj, camera, light):
     if not os.path.exists(camera_config_path):
@@ -33,10 +54,12 @@ def frame_camera_and_light(obj, camera, light):
     except Exception as e:
         print(f"⚠️ Could not apply camera/light config: {e}")
 
+
 def smooth_object(obj):
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     bpy.ops.object.shade_smooth()
+
 
 def setup_preview_object():
     primitive_fallback = True
@@ -61,7 +84,6 @@ def setup_preview_object():
             obj = bpy.context.active_object
             if obj:
                 obj.name = "PreviewObject"
-                
         else:
             ext = os.path.splitext(name)[1].lower()
             full_path = os.path.join(preview_model_dir, name)
@@ -87,10 +109,10 @@ def setup_preview_object():
                         smooth_object(imported)
                         obj = imported
                         break
+
     if not obj:
         obj = bpy.data.objects.get("PreviewObject")
 
-    # ✅ Reapply shade smooth if this was the sphere primitive
     if obj and obj.name == "PreviewObject":
         if obj.data.name.startswith("Sphere") or "Sphere" in obj.data.name:
             bpy.context.view_layer.objects.active = obj
@@ -115,7 +137,7 @@ bsdf = material.node_tree.nodes.get("Principled BSDF")
 
 for f in [done_path, signal_path]:
     if os.path.exists(f):
-        os.remove(f)
+        safe_remove(f)
 
 print("✅ Blender daemon running...")
 
@@ -139,5 +161,5 @@ while True:
                 print("✅ Preview rendered and saved.")
         except Exception as e:
             print("❌ Error during render:", e)
-        os.remove(signal_path)
+        safe_remove(signal_path)
     time.sleep(0.1)

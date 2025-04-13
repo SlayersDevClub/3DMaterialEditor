@@ -12,6 +12,9 @@ import threading
 
 CONFIG_FILENAME = "editor_config.txt"
 
+
+import atexit
+
 class MaterialEditorApp:
     def __init__(self, root):
         self.root = root
@@ -53,6 +56,10 @@ class MaterialEditorApp:
         preview_menu.add_separator()
         preview_menu.add_command(label="Camera Settings", command=self.open_camera_settings)
 
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Material Gallery", command=self.open_material_gallery)
+
+        menubar.add_cascade(label="View", menu=view_menu)
         menubar.add_cascade(label="File", menu=file_menu)
         menubar.add_cascade(label="Preview", menu=preview_menu)
         self.root.config(menu=menubar)
@@ -151,78 +158,23 @@ class MaterialEditorApp:
         self.launch_blender_daemon()
 
     def on_close(self):
-        if self.daemon_process:
+        # Kill Blender process if running
+        if self.blender_pid_path and os.path.exists(self.blender_pid_path):
             try:
-                self.daemon_process.terminate()
+                with open(self.blender_pid_path, "r") as f:
+                    pid = int(f.read().strip())
+
+                system = platform.system()
+                if system == "Windows":
+                    subprocess.call(["taskkill", "/PID", str(pid), "/F"])
+                else:
+                    subprocess.call(["kill", "-9", str(pid)])
+
+                os.remove(self.blender_pid_path)
             except Exception as e:
-                print("⚠️ Could not terminate Blender:", e)
+                print(f"⚠️ Could not terminate Blender daemon: {e}")
+
         self.root.destroy()
-
-        # Main frames
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.left_frame = tk.Frame(self.root, width=200)
-        self.left_frame.pack(side=tk.LEFT, fill=tk.Y)
-        self.right_frame = tk.Frame(self.root)
-        self.right_frame.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH)
-
-        menubar = tk.Menu(self.root)
-        file_menu = tk.Menu(menubar, tearoff=0)
-
-        file_menu.add_command(label="New Project", command=self.new_project)
-        file_menu.add_command(label="Open Project", command=self.open_project)
-        file_menu.add_separator()
-        file_menu.add_command(label="Save CSV", command=self.save_csv)
-        file_menu.add_separator()
-        file_menu.add_command(label="Add Material", command=self.add_material)
-        file_menu.add_command(label="Export to Unity", command=self.export_to_unity)
-        file_menu.add_separator()
-        file_menu.add_command(label="Set Blender Path", command=self.set_blender_path)
-        file_menu.add_separator()
-        file_menu.add_command(label="Set Custom Preview Model", command=self.set_custom_preview_model)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.on_close)
-
-        menubar.add_cascade(label="File", menu=file_menu)
-        self.root.config(menu=menubar)
-
-        # Left: Material list
-        self.material_listbox = tk.Listbox(self.left_frame)
-        self.material_listbox.pack(fill=tk.BOTH, expand=True)
-        self.material_listbox.bind("<<ListboxSelect>>", self.on_material_select)
-
-
-        # Right: Material preview + editor
-        self.preview_label = tk.Label(self.right_frame, text="Preview not available", relief=tk.SUNKEN)
-        self.preview_label.pack(fill=tk.X, pady=(0, 10))
-
-        self.name_var = tk.StringVar()
-        tk.Label(self.right_frame, text="Material Name").pack()
-        tk.Entry(self.right_frame, textvariable=self.name_var).pack(fill=tk.X)
-
-        self.color = (1.0, 1.0, 1.0)
-        tk.Button(self.right_frame, text="Pick Albedo Color", command=self.pick_color).pack(fill=tk.X)
-
-        self.roughness = tk.DoubleVar(value=0.5)
-        tk.Label(self.right_frame, text="Smoothness").pack()
-        tk.Scale(self.right_frame, from_=0, to=1, resolution=0.01, variable=self.roughness, orient="horizontal").pack(fill=tk.X)
-        self.roughness.trace_add("write", lambda *args: self.render_preview())
-
-        self.metalness = tk.DoubleVar(value=0.0)
-        tk.Label(self.right_frame, text="Metalness").pack()
-        tk.Scale(self.right_frame, from_=0, to=1, resolution=0.01, variable=self.metalness, orient="horizontal").pack(fill=tk.X)
-        self.metalness.trace_add("write", lambda *args: self.render_preview())
-
-        self.map_vars = {}
-        for map_type in ["albedo_map", "metalness_map", "detail_map", "emmissive_map"]:
-            var = tk.StringVar()
-            self.map_vars[map_type] = var
-            row = tk.Frame(self.right_frame)
-            row.pack(fill=tk.X)
-            tk.Label(row, text=map_type).pack(side=tk.LEFT)
-            tk.Entry(row, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-            tk.Button(row, text="...", command=lambda mt=map_type: self.pick_map(mt)).pack(side=tk.RIGHT)
-
-        tk.Button(self.right_frame, text="Save Changes", command=self.save_current_material).pack(fill=tk.X, pady=10)
 
     def set_blender_path(self):
         path = filedialog.askopenfilename(title="Select Blender Executable")
@@ -285,15 +237,66 @@ class MaterialEditorApp:
         if os.path.exists(path):
             with open(path, "r") as f:
                 self.blender_path = f.read().strip()
+    def open_material_gallery(self):
+        gallery = tk.Toplevel(self.root)
+        gallery.title("Material Gallery")
+
+        canvas = tk.Canvas(gallery)
+        frame = tk.Frame(canvas)
+        scrollbar = tk.Scrollbar(gallery, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def on_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        frame.bind("<Configure>", on_configure)
+
+        # Display grid of material previews
+        columns = 4
+        thumb_size = (96, 96)
+        for index, mat in enumerate(self.materials):
+            row = index // columns
+            col = index % columns
+
+            mat_frame = tk.Frame(frame, bd=2, relief="groove", padx=4, pady=4)
+            mat_frame.grid(row=row, column=col, padx=6, pady=6)
+
+            preview_path = os.path.join(self.working_dir, "preview.png")
+            if os.path.exists(preview_path):
+                img = Image.open(preview_path).resize(thumb_size)
+                tk_img = ImageTk.PhotoImage(img)
+            else:
+                img = Image.new("RGB", thumb_size, (100, 100, 100))
+                tk_img = ImageTk.PhotoImage(img)
+
+            label_img = tk.Label(mat_frame, image=tk_img)
+            label_img.image = tk_img  # keep reference
+            label_img.pack()
+            label_name = tk.Label(mat_frame, text=mat['Name'], wraplength=thumb_size[0])
+            label_name.pack()
+
 
     def launch_blender_daemon(self):
         if not self.blender_path or not self.working_dir:
             return
+
         blend_file = os.path.join(self.working_dir, "preview.blend")
         daemon_script = os.path.join(self.working_dir, "blender_daemon.py")
-        self.daemon_process = subprocess.Popen([
+
+        # Launch Blender in background
+        process = subprocess.Popen([
             self.blender_path, "-b", blend_file, "--python", daemon_script
         ])
+
+        self.daemon_process = process
+        self.blender_pid_path = os.path.join(self.working_dir, "blender_pid.txt")
+
+        # Save PID
+        with open(self.blender_pid_path, "w") as f:
+            f.write(str(process.pid))
 
     def new_project(self):
         self.working_dir = filedialog.askdirectory(title="Select New Project Folder")
@@ -421,6 +424,7 @@ class MaterialEditorApp:
 
         with open(config_path, "w") as f:
             f.write(f"{mat['albedo_r']},{mat['albedo_g']},{mat['albedo_b']},{mat['smoothness_multiplier']},{mat['metalness_multiplier']}")
+            f = None
 
         if os.path.exists(done_path):
             os.remove(done_path)
