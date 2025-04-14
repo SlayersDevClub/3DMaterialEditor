@@ -1,0 +1,1 @@
+1.0,0.0,0.0,0.5,0.0,materials/Material_0/textures/Bricks064_Color.png,

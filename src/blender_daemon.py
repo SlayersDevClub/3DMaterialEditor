@@ -5,20 +5,24 @@ import math
 import mathutils
 import errno
 
-base_path = os.path.dirname(__file__)
-config_path = os.path.join(base_path, "material_config.txt")
-signal_path = os.path.join(base_path, "signal.txt")
-done_path = os.path.join(base_path, "done.txt")
-preview_path = os.path.join(base_path, "preview.png")
-preview_model_dir = os.path.join(base_path, "preview_model")
+# Resolve paths
+app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+data_path = os.path.join(app_dir, "data")
+preview_model_dir = os.path.join(data_path, "preview_model")
 model_info_path = os.path.join(preview_model_dir, "model.txt")
-camera_config_path = os.path.join(base_path, "camera_config.txt")
+config_path = os.path.join(data_path, "material_config.txt")
+signal_path = os.path.join(data_path, "signal.txt")
+done_path = os.path.join(data_path, "done.txt")
+preview_path = os.path.join(data_path, "preview.png")
+camera_config_path = os.path.join(data_path, "camera_config.txt")
 
 
 def safe_remove(path, retries=5, delay=0.1):
     for _ in range(retries):
         try:
             os.remove(path)
+            return True
+        except FileNotFoundError:
             return True
         except PermissionError as e:
             if e.errno == errno.EACCES:
@@ -29,16 +33,70 @@ def safe_remove(path, retries=5, delay=0.1):
     return False
 
 
-def apply_material_settings(bsdf):
-    with open(config_path, "r") as f:
-        line = f.read().strip()
+def apply_material_settings():
+    if not os.path.exists(config_path):
+        print("❌ Missing material config")
+        return
+
+    try:
+        with open(config_path, "r") as f:
+            parts = f.read().strip().split(",")
+            if len(parts) < 5:
+                print(f"❌ Invalid material config: {','.join(parts)}")
+                return
+
+            # Parse the required floats
+            r, g, b = map(float, parts[0:3])
+            smoothness = float(parts[3])
+            metalness = float(parts[4])
+
+            # Optional maps
+            albedo_map_path = parts[5].strip() if len(parts) > 5 else ""
+            metalness_map_path = parts[6].strip() if len(parts) > 6 else ""
+
+    except Exception as e:
+        print("❌ Failed to parse material config:", e)
+        return
+
+    material = bpy.data.materials.get("PreviewMaterial")
+    if not material:
+        print("❌ Material not found")
+        return
+
+    node_tree = material.node_tree
+    nodes = node_tree.nodes
+
+    group_node = next((n for n in nodes if n.type == "GROUP" and n.node_tree.name == "PBRMaterialGroup"), None)
+    albedo_tex_node = nodes.get("AlbedoMap")
+    metalness_tex_node = nodes.get("MetalnessMap")
+
+    if not group_node:
+        print("❌ PBRMaterialGroup not found")
+        return
+
+    # Load images if provided
+    if albedo_tex_node and albedo_map_path and os.path.exists(albedo_map_path):
         try:
-            r, g, b, rough, metal = map(float, line.split(","))
-            bsdf.inputs["Base Color"].default_value = (r, g, b, 1)
-            bsdf.inputs["Roughness"].default_value = rough
-            bsdf.inputs["Metallic"].default_value = metal
-        except ValueError:
-            print(f"❌ Invalid material config: {line}")
+            albedo_tex_node.image = bpy.data.images.load(albedo_map_path, check_existing=True)
+        except Exception as e:
+            print("⚠️ Failed to load albedo map:", e)
+
+    if metalness_tex_node and metalness_map_path and os.path.exists(metalness_map_path):
+        try:
+            metalness_tex_node.image = bpy.data.images.load(metalness_map_path, check_existing=True)
+        except Exception as e:
+            print("⚠️ Failed to load metalness map:", e)
+
+    # Set group inputs
+    inputs = group_node.inputs
+    if "AlbedoColor" in inputs:
+        inputs["AlbedoColor"].default_value = (r, g, b, 1)
+    if "SmoothnessMultiplier" in inputs:
+        inputs["SmoothnessMultiplier"].default_value = smoothness
+    if "MetalnessMultiplier" in inputs:
+        inputs["MetalnessMultiplier"].default_value = metalness
+
+    print("✅ Material values and maps set successfully")
 
 
 def frame_camera_and_light(obj, camera, light):
@@ -86,7 +144,7 @@ def setup_preview_object():
                 obj.name = "PreviewObject"
         else:
             ext = os.path.splitext(name)[1].lower()
-            full_path = os.path.join(preview_model_dir, name)
+            full_path = os.path.join(data_path, name)
             if os.path.exists(full_path):
                 bpy.ops.object.select_all(action='DESELECT')
                 for o in bpy.context.scene.objects:
@@ -122,6 +180,7 @@ def setup_preview_object():
     return obj
 
 
+# Set render properties
 scene = bpy.context.scene
 scene.render.filepath = preview_path
 scene.render.image_settings.file_format = 'PNG'
@@ -129,37 +188,40 @@ scene.render.resolution_x = 512
 scene.render.resolution_y = 512
 scene.render.resolution_percentage = 100
 
+# Get or create material
 material = bpy.data.materials.get("PreviewMaterial")
 if not material:
     material = bpy.data.materials.new("PreviewMaterial")
     material.use_nodes = True
-bsdf = material.node_tree.nodes.get("Principled BSDF")
 
+# Clean up old signals
 for f in [done_path, signal_path]:
     if os.path.exists(f):
         safe_remove(f)
 
 print("✅ Blender daemon running...")
 
+# Main render loop
 while True:
     if os.path.exists(signal_path):
         try:
             obj = setup_preview_object()
-            if obj and bsdf:
+            if obj:
                 if not obj.data.materials:
                     obj.data.materials.append(material)
                 else:
                     obj.data.materials[0] = material
                 camera = bpy.data.objects.get("Camera")
                 light = bpy.data.objects.get("Light")
-                apply_material_settings(bsdf)
+                if os.path.exists(config_path):
+                    apply_material_settings()
                 if camera and light:
                     frame_camera_and_light(obj, camera, light)
                 bpy.ops.render.render(write_still=True)
                 with open(done_path, "w") as f:
                     f.write("done")
-                print("✅ Preview rendered and saved.")
+                print(f"✅ Preview rendered to: {preview_path}")
         except Exception as e:
             print("❌ Error during render:", e)
         safe_remove(signal_path)
-    time.sleep(0.1)
+    time.sleep(0.05)
