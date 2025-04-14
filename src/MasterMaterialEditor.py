@@ -13,6 +13,8 @@ import time
 import threading
 
 CONFIG_FILENAME = "editor_config.txt"
+RECENT_PROJECTS_FILE = os.path.expanduser("~/.material_editor_recent_projects.txt")
+
 
 class MaterialEditorApp:
     def __init__(self, root):
@@ -64,17 +66,29 @@ class MaterialEditorApp:
         preview_menu.add_command(label="Use Cube Primitive", command=lambda: self.set_primitive_preview("cube"))
         preview_menu.add_command(label="Use Cylinder Primitive", command=lambda: self.set_primitive_preview("cylinder"))
 
+        recent_menu = ttk.Menu(file_menu, tearoff=0)
+        self.recent_menu = recent_menu  # Save reference
+
+        file_menu.add_cascade(label="Open Recent", menu=recent_menu)
+
+
         menubar.add_cascade(label="File", menu=file_menu)
         menubar.add_cascade(label="Edit", menu=edit_menu)
         menubar.add_cascade(label="Preview", menu=preview_menu)
         self.root.config(menu=menubar)
+        self.build_recent_menu(recent_menu)
 
         self.left_frame = ttk.Frame(self.root, width=200)
         self.left_frame.pack(side=ttk.LEFT, fill=ttk.Y)
         self.right_frame = ttk.Frame(self.root)
         self.right_frame.pack(side=ttk.RIGHT, expand=True, fill=ttk.BOTH)
 
-        self.material_listbox = ttk.Treeview(self.left_frame)
+        self.material_listbox = ttk.Treeview(self.left_frame, columns=("Name",), show="headings")
+        self.material_listbox.heading("Name", text="Material Name")
+        self.material_listbox.column("Name", anchor="w")
+        self.material_listbox.pack(fill=ttk.BOTH, expand=True)
+
+
         self.material_listbox.pack(fill=ttk.BOTH, expand=True)
         self.material_listbox.bind("<<TreeviewSelect>>", self.on_material_select)
 
@@ -118,6 +132,18 @@ class MaterialEditorApp:
 
         ttk.Button(self.right_frame, text="Save Changes", command=self.save_current_material).pack(fill=ttk.X, pady=10)
 
+    def open_project_from_path(self, path):
+        if not os.path.isdir(path):
+            messagebox.showerror("Error", f"Project folder not found:\n{path}")
+            return
+        self.working_dir = path
+        self.add_to_recent_projects(path)
+        self.build_recent_menu(self.recent_menu)
+        self.load_project_materials()
+        self.load_blender_path()
+        self.launch_blender_daemon()
+
+
     def on_slider_changed(self, value):
         if hasattr(self, '_slider_timer'):
             self.root.after_cancel(self._slider_timer)
@@ -138,6 +164,37 @@ class MaterialEditorApp:
         if rgb:
             self.color = tuple(c / 255.0 for c in rgb)
             self.schedule_preview_render()
+
+    def load_recent_projects(self):
+        if not os.path.exists(RECENT_PROJECTS_FILE):
+            return []
+        with open(RECENT_PROJECTS_FILE, "r") as f:
+            return [line.strip() for line in f if os.path.isdir(line.strip())]
+        
+    def add_to_recent_projects(self, path):
+        projects = self.load_recent_projects()
+        if path in projects:
+            projects.remove(path)
+        projects.insert(0, path)  # Most recent on top
+        projects = projects[:10]  # Limit to last 10
+
+        with open(RECENT_PROJECTS_FILE, "w") as f:
+            for p in projects:
+                f.write(p + "\n")
+
+    def build_recent_menu(self, recent_menu):
+        recent_menu.delete(0, "end")  # Clear existing
+        projects = self.load_recent_projects()
+        if not projects:
+            recent_menu.add_command(label="No recent projects", state="disabled")
+            return
+
+        for path in projects:
+            recent_menu.add_command(
+                label=path,
+                command=lambda p=path: self.open_project_from_path(p)
+        )
+
 
     def pick_map(self, map_type):
         file = filedialog.askopenfilename(title=f"Select {map_type} texture")
@@ -548,6 +605,25 @@ class MaterialEditorApp:
         self.launch_blender_daemon()
         messagebox.showinfo("New Project", "New project initialized. You can now add materials.")
 
+    def load_project_materials(self):
+        csv_path = os.path.join(self.working_dir, "materials.csv")
+        self.materials.clear()
+
+        for item in self.material_listbox.get_children():
+            self.material_listbox.delete(item)
+
+        if os.path.exists(csv_path):
+            with open(csv_path, newline='') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    self.materials.append(row)
+                    self.material_listbox.insert("", "end", values=(row['Name'],))
+
+
+
+        self.build_recent_menu(self.recent_menu)  # Refresh recent list
+
+
     def open_project(self):
         self.working_dir = filedialog.askdirectory(title="Select Project Folder")
         if not self.working_dir:
@@ -555,6 +631,7 @@ class MaterialEditorApp:
 
         csv_path = os.path.join(self.working_dir, "materials.csv")        
         self.materials.clear()
+        self.add_to_recent_projects(self.working_dir)
         #self.material_listbox.delete(0, ttk.END)
         for item in self.material_listbox.get_children():
             # Get the selected item ID
@@ -566,7 +643,8 @@ class MaterialEditorApp:
                 reader = csv.DictReader(csvfile)
                 for row in reader:
                     self.materials.append(row)
-                    self.material_listbox.insert("", "end", text=...)
+                    self.material_listbox.insert("", "end", values=(row['Name'],))
+
 
 
         self.load_blender_path()
@@ -597,20 +675,17 @@ class MaterialEditorApp:
             'albedo_map': '', 'metalness_map': '', 'detail_map': '', 'emmissive_map': ''
         }
         self.materials.append(new_mat)
-        for item in self.material_listbox.selection():
-            self.material_listbox.selection_remove(item)
-        # Insert the new material and get its item ID
-        item_id = self.material_listbox.insert("", "end", text=new_mat['Name'])
 
-        # Deselect previous selections
-        for item in self.material_listbox.selection():
-            self.material_listbox.selection_remove(item)
+        # Insert new material and get its ID
+        item_id = self.material_listbox.insert("", "end", values=(new_mat['Name'],))
 
-        # Select and focus the newly inserted item
+        # Clear previous selection
+        self.material_listbox.selection_remove(self.material_listbox.selection())
         self.material_listbox.selection_set(item_id)
         self.material_listbox.focus(item_id)
 
         self.on_material_select()
+
 
 
     def save_current_material(self):

@@ -103,12 +103,12 @@ def frame_camera_and_light(obj, camera, light):
     if not os.path.exists(camera_config_path):
         return
     try:
-        with open(camera_config_path, "r") as f:
-            cx, cy, cz, light_rot = map(float, f.read().strip().split(","))
+        #with open(camera_config_path, "r") as f:
+            #cx, cy, cz, light_rot = map(float, f.read().strip().split(","))
         camera.location = (cx, cy, cz)
         direction = mathutils.Vector((0, 0, 0)) - camera.location
         camera.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
-        light.rotation_euler = (math.radians(light_rot), 0, 0)
+        #light.rotation_euler = (math.radians(light_rot), 0, 0)
     except Exception as e:
         print(f"⚠️ Could not apply camera/light config: {e}")
 
