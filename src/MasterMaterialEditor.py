@@ -14,6 +14,7 @@ import threading
 
 CONFIG_FILENAME = "editor_config.txt"
 RECENT_PROJECTS_FILE = os.path.expanduser("~/.material_editor_recent_projects.txt")
+Image.LOAD_TRUNCATED_IMAGES = True  # in your imports, if not already
 
 
 class MaterialEditorApp:
@@ -30,6 +31,8 @@ class MaterialEditorApp:
 
         self._render_in_progress = False
         self._retry_render = False
+        self._render_timer = None
+
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -149,8 +152,11 @@ class MaterialEditorApp:
             self.root.after_cancel(self._slider_timer)
         self._slider_timer = self.root.after(100, self.render_preview)
 
-    def schedule_preview_render(self):
-        self.render_preview()
+    def schedule_preview_render(self, delay=150):
+        if self._render_timer:
+            self.root.after_cancel(self._render_timer)
+        self._render_timer = self.root.after(delay, self.render_preview)
+
 
     def trigger_render_signal(self):
         if self._render_in_progress:
@@ -247,35 +253,37 @@ class MaterialEditorApp:
         material_folder = os.path.join(self.working_dir, "materials", mat['Name'])
         material_config_path = os.path.join(material_folder, "material_config.txt")
 
-        # Load config values (preferred over CSV)
-        if os.path.exists(material_config_path):
-            try:
+        # Load config values (prefer local config if available)
+        try:
+            if os.path.exists(material_config_path):
                 with open(material_config_path, "r") as f:
-                    r, g, b, rough, metal = map(float, f.read().strip().split(","))
+                    parts = f.read().strip().split(",")
+                    r, g, b = map(float, parts[0:3])
+                    rough = float(parts[3])
+                    metal = float(parts[4])
                     self.color = (r, g, b)
                     self.roughness.set(rough)
                     self.metalness.set(metal)
                     print(f"✅ Loaded config from: {material_config_path}")
-            except Exception as e:
-                print("❌ Failed to load config:", e)
-        else:
-            # Fall back to CSV values only if no config file exists
-            self.color = (float(mat['albedo_r']), float(mat['albedo_g']), float(mat['albedo_b']))
-            self.roughness.set(float(mat['smoothness_multiplier']))
-            self.metalness.set(float(mat['metalness_multiplier']))
+            else:
+                self.color = (float(mat['albedo_r']), float(mat['albedo_g']), float(mat['albedo_b']))
+                self.roughness.set(float(mat['smoothness_multiplier']))
+                self.metalness.set(float(mat['metalness_multiplier']))
+        except Exception as e:
+            print("❌ Failed to load config:", e)
 
         self.name_var.set(mat['Name'])
 
-        # Load maps
+        # Load texture map paths
         for map_type in self.map_vars:
             tex_name = mat.get(map_type, '')
             if tex_name:
                 local_path = os.path.join("materials", mat['Name'], "textures", os.path.basename(tex_name))
                 self.map_vars[map_type].set(local_path)
             else:
-                self.map_vars[map_type].set('')
+                self.map_vars[map_type].set("")
 
-        # Load preview
+        # Show latest preview image (might be from disk cache)
         preview_path = os.path.join(material_folder, "preview.png")
         if os.path.exists(preview_path):
             try:
@@ -285,67 +293,9 @@ class MaterialEditorApp:
             except Exception as e:
                 print("❌ Failed to load preview image:", e)
 
+        # Schedule the render (small delay to let UI settle first)
+        self.root.after(100, self.render_preview)
 
-    def render_preview(self):
-        if not self.working_dir or self.current_index is None:
-            return
-
-        mat = self.materials[self.current_index]
-        mat['Name'] = self.name_var.get()
-        mat['albedo_r'], mat['albedo_g'], mat['albedo_b'] = self.color
-        mat['smoothness_multiplier'] = self.roughness.get()
-        mat['metalness_multiplier'] = self.metalness.get()
-        for k in self.map_vars:
-            mat[k] = self.map_vars[k].get()
-
-        app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        data_path = os.path.join(app_dir, "data")
-        config_path = os.path.join(data_path, "material_config.txt")
-        command_path = os.path.join(data_path, "command.txt")
-        preview_path = os.path.join(data_path, "preview.png")
-
-        with open(config_path, "w") as f:
-            f.write(f"{mat['albedo_r']},{mat['albedo_g']},{mat['albedo_b']},"
-                    f"{mat['smoothness_multiplier']},{mat['metalness_multiplier']},"
-                    f"{mat.get('albedo_map', '')},{mat.get('metalness_map', '')}")
-
-        with open(command_path, "w") as f:
-            f.write("render")
-
-        # Save a copy to material's own folder
-        material_folder = os.path.join(self.working_dir, "materials", mat['Name'])
-        os.makedirs(material_folder, exist_ok=True)
-        local_config_path = os.path.join(material_folder, "material_config.txt")
-        with open(local_config_path, "w") as f:
-            f.write(f"{mat['albedo_r']},{mat['albedo_g']},{mat['albedo_b']},"
-                    f"{mat['smoothness_multiplier']},{mat['metalness_multiplier']},"
-                    f"{mat.get('albedo_map', '')},{mat.get('metalness_map', '')}")
-
-            
-        def wait_for_render():
-            start = time.time()
-            while not os.path.exists(preview_path):
-                if time.time() - start > 10:
-                    print("❌ Timeout waiting for render")
-                    return
-                time.sleep(0.05)
-            try:
-                img = Image.open(preview_path).resize((256, 256))
-                self.preview_image = ImageTk.PhotoImage(img)
-                self.preview_label.config(image=self.preview_image, text="")
-
-                material_folder = os.path.join(self.working_dir, "materials", mat['Name'])
-                os.makedirs(material_folder, exist_ok=True)
-                final_preview = os.path.join(material_folder, "preview.png")
-                shutil.copy(preview_path, final_preview)
-                print(f"✅ Saved preview to: {final_preview}")
-            except Exception as e:
-                print("❌ Error loading preview image:", e)
-
-
-
-
-        threading.Thread(target=wait_for_render, daemon=True).start()
     def set_primitive_preview(self, primitive):
         if not self.working_dir:
             messagebox.showwarning("No Project", "Open or create a project first.")
@@ -757,59 +707,70 @@ class MaterialEditorApp:
         if not self.working_dir or self.current_index is None:
             return
 
-        # Get the current material and update its values from the UI.
         mat = self.materials[self.current_index]
-        mat['Name'] = self.name_var.get()
+        mat_name = mat['Name']  # Store current material name for consistency
+
+        # Update material values from UI
         mat['albedo_r'], mat['albedo_g'], mat['albedo_b'] = self.color
         mat['smoothness_multiplier'] = self.roughness.get()
         mat['metalness_multiplier'] = self.metalness.get()
         for k in self.map_vars:
             mat[k] = self.map_vars[k].get()
 
-        # Instead of writing to a material-specific folder here,
-        # we write the configuration to the central data folder.
-        # (Your daemon script will read from this central location.)
+        # Resolve paths
         app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         data_path = os.path.join(app_dir, "data")
-        central_config_path = os.path.join(data_path, "material_config.txt")
-        central_signal_path = os.path.join(data_path, "signal.txt")
-        central_done_path   = os.path.join(data_path, "done.txt")
-        central_preview_path = os.path.join(data_path, "preview.png")
+        config_path = os.path.join(data_path, "material_config.txt")
+        command_path = os.path.join(data_path, "command.txt")
+        done_path = os.path.join(data_path, "done.txt")
+        preview_path = os.path.join(data_path, "preview.png")
 
-        with open(central_config_path, "w") as f:
+        # Write config for daemon
+        with open(config_path, "w") as f:
             f.write(f"{mat['albedo_r']},{mat['albedo_g']},{mat['albedo_b']},"
-                    f"{mat['smoothness_multiplier']},{mat['metalness_multiplier']}")
+                    f"{mat['smoothness_multiplier']},{mat['metalness_multiplier']},"
+                    f"{mat.get('albedo_map','')},{mat.get('metalness_map','')}")
 
-        # Remove previous "done" signal if it exists, then signal the daemon.
-        if os.path.exists(central_done_path):
-            os.remove(central_done_path)
-        with open(central_signal_path, "w") as f:
-            f.write("go")
+        if os.path.exists(done_path):
+            os.remove(done_path)
 
-        # Start a thread that waits for the daemon to finish rendering.
-        def wait_for_render():
-            while not os.path.exists(central_done_path):
-                time.sleep(0.1)
+        with open(command_path, "w") as f:
+            f.write("render")
+
+        def wait_for_render(expected_mat_name=mat_name):
+            start = time.time()
+            while not os.path.exists(done_path):
+                if time.time() - start > 10:
+                    print("❌ Timeout waiting for render")
+                    return
+                time.sleep(0.05)
+
             try:
-                img = Image.open(central_preview_path).resize((256, 256))
+                with open(preview_path, "rb") as f:
+                    img = Image.open(f)
+                    img.load()
+                    img = img.resize((256, 256))
             except Exception as e:
-                print("Error loading preview:", e)
+                print("❌ Error loading preview image:", e)
                 return
+
+            if self.name_var.get() != expected_mat_name:
+                print(f"⚠️ Skipping outdated preview: expected {expected_mat_name}, but user selected {self.name_var.get()}")
+                return
+
             self.preview_image = ImageTk.PhotoImage(img)
             self.preview_label.config(image=self.preview_image, text="")
 
-            # Now copy the live preview into the specific material folder.
-            # Create (or ensure) the material's folder exists.
-            material_folder = os.path.join(self.working_dir, "materials", mat['Name'])
-            os.makedirs(material_folder, exist_ok=True)
-            final_preview = os.path.join(material_folder, "preview.png")
+            # Save preview to material folder
+            final_preview = os.path.join(self.working_dir, "materials", expected_mat_name, "preview.png")
             try:
-                shutil.copy(central_preview_path, final_preview)
+                shutil.copy(preview_path, final_preview)
                 print(f"✅ Saved preview to: {final_preview}")
             except Exception as e:
-                print("❌ Failed to copy preview:", e)
+                print("❌ Failed to save preview:", e)
 
         threading.Thread(target=wait_for_render, daemon=True).start()
+
 
 
     def export_to_unity(self):

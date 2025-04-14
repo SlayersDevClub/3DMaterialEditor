@@ -11,7 +11,7 @@ data_path = os.path.join(app_dir, "data")
 preview_model_dir = os.path.join(data_path, "preview_model")
 model_info_path = os.path.join(preview_model_dir, "model.txt")
 config_path = os.path.join(data_path, "material_config.txt")
-signal_path = os.path.join(data_path, "signal.txt")
+command_path = os.path.join(data_path, "command.txt")
 done_path = os.path.join(data_path, "done.txt")
 preview_path = os.path.join(data_path, "preview.png")
 camera_config_path = os.path.join(data_path, "camera_config.txt")
@@ -103,14 +103,15 @@ def frame_camera_and_light(obj, camera, light):
     if not os.path.exists(camera_config_path):
         return
     try:
-        #with open(camera_config_path, "r") as f:
-            #cx, cy, cz, light_rot = map(float, f.read().strip().split(","))
+        with open(camera_config_path, "r") as f:
+            cx, cy, cz, light_rot = map(float, f.read().strip().split(","))
         camera.location = (cx, cy, cz)
         direction = mathutils.Vector((0, 0, 0)) - camera.location
         camera.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
-        #light.rotation_euler = (math.radians(light_rot), 0, 0)
+        light.rotation_euler = (math.radians(light_rot), 0, 0)
     except Exception as e:
         print(f"⚠️ Could not apply camera/light config: {e}")
+
 
 
 def smooth_object(obj):
@@ -195,15 +196,17 @@ if not material:
     material.use_nodes = True
 
 # Clean up old signals
-for f in [done_path, signal_path]:
-    if os.path.exists(f):
-        safe_remove(f)
+if os.path.exists(done_path):
+    os.remove(done_path)
+if os.path.exists(command_path):
+    os.remove(command_path)
+
 
 print("✅ Blender daemon running...")
 
 # Main render loop
 while True:
-    if os.path.exists(signal_path):
+    if os.path.exists(command_path):
         try:
             obj = setup_preview_object()
             if obj:
@@ -221,7 +224,6 @@ while True:
                 with open(done_path, "w") as f:
                     f.write("done")
                 print(f"✅ Preview rendered to: {preview_path}")
+            os.remove(command_path)  # ✅ prevent repeated rendering
         except Exception as e:
             print("❌ Error during render:", e)
-        safe_remove(signal_path)
-    time.sleep(0.05)
