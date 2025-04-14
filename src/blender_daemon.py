@@ -195,35 +195,45 @@ if not material:
     material = bpy.data.materials.new("PreviewMaterial")
     material.use_nodes = True
 
-# Clean up old signals
-if os.path.exists(done_path):
-    os.remove(done_path)
-if os.path.exists(command_path):
-    os.remove(command_path)
-
 
 print("✅ Blender daemon running...")
 
-# Main render loop
+last_command = None
+
 while True:
     if os.path.exists(command_path):
         try:
-            obj = setup_preview_object()
-            if obj:
-                if not obj.data.materials:
-                    obj.data.materials.append(material)
-                else:
-                    obj.data.materials[0] = material
-                camera = bpy.data.objects.get("Camera")
-                light = bpy.data.objects.get("Light")
-                if os.path.exists(config_path):
-                    apply_material_settings()
-                if camera and light:
-                    frame_camera_and_light(obj, camera, light)
-                bpy.ops.render.render(write_still=True)
-                with open(done_path, "w") as f:
-                    f.write("done")
-                print(f"✅ Preview rendered to: {preview_path}")
-            os.remove(command_path)  # ✅ prevent repeated rendering
+            with open(command_path, "r") as f:
+                command = f.read().strip()
+
+            if command == "render":
+                obj = setup_preview_object()
+                if obj:
+                    if not obj.data.materials:
+                        obj.data.materials.append(material)
+                    else:
+                        obj.data.materials[0] = material
+                    camera = bpy.data.objects.get("Camera")
+                    light = bpy.data.objects.get("Light")
+                    if os.path.exists(config_path):
+                        apply_material_settings()
+                    if camera and light:
+                        frame_camera_and_light(obj, camera, light)
+                    bpy.ops.render.render(write_still=True)
+                    with open(done_path, "w") as f:
+                        f.write("done")
+                    print(f"✅ Preview rendered to: {preview_path}")
+
+                # 🧹 Clear the command after handling it
+                with open(command_path, "w") as f:
+                    f.write("")
+
+            elif command:
+                print(f"⚠️ Unknown command: {command}")
+
         except Exception as e:
             print("❌ Error during render:", e)
+
+    time.sleep(0.1)
+
+
