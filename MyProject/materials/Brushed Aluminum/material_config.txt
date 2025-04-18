@@ -1,0 +1,1 @@
+0.82,0.83,0.85,0.06504065040650407,1.0,materials/Brushed Aluminum/textures/Bricks064_Color.png,

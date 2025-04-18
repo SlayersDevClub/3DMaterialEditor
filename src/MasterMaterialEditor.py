@@ -13,6 +13,10 @@ import time
 import threading
 import platform
 
+#my stuff
+from src import material_utils as mat_utils
+from src import blender_utils
+
 CONFIG_FILENAME = "editor_config.txt"
 RECENT_PROJECTS_FILE = os.path.expanduser("~/.material_editor_recent_projects.txt")
 Image.LOAD_TRUNCATED_IMAGES = True  # in your imports, if not already
@@ -110,7 +114,7 @@ class MaterialEditorApp:
         ttk.Entry(self.right_frame, textvariable=self.name_var).pack(fill=ttk.X)
 
         self.color = (1.0, 1.0, 1.0)
-        ttk.Button(self.right_frame, text="Pick Albedo Color", command=self.pick_color).pack(fill=ttk.X)
+        ttk.Button(self.right_frame, text="Pick Albedo Color", command=mat_utils.pick_color).pack(fill=ttk.X)
 
         self.roughness = ttk.DoubleVar(value=0.5)
         ttk.Label(self.right_frame, text="Smoothness").pack()
@@ -146,9 +150,11 @@ class MaterialEditorApp:
         self.add_to_recent_projects(path)
         self.build_recent_menu(self.recent_menu)
         self.load_project_materials()
-        self.load_blender_path()
-        self.launch_blender_daemon()
+        self.blender_path = blender_utils.load_blender_path(self.working_dir)
 
+        self.daemon_process, self.blender_pid_path = blender_utils.launch_blender_daemon(
+    self.blender_path, self.working_dir
+)
 
     def on_slider_changed(self, value):
         if hasattr(self, '_slider_timer'):
@@ -160,19 +166,11 @@ class MaterialEditorApp:
             self.root.after_cancel(self._render_timer)
         self._render_timer = self.root.after(delay, self.render_preview)
 
-
     def trigger_render_signal(self):
         if self._render_in_progress:
             self._retry_render = True
             return
         self.render_preview()
-
-
-    def pick_color(self):
-        rgb = colorchooser.askcolor()[0]
-        if rgb:
-            self.color = tuple(c / 255.0 for c in rgb)
-            self.schedule_preview_render()
 
     def load_recent_projects(self):
         if not os.path.exists(RECENT_PROJECTS_FILE):
@@ -339,14 +337,6 @@ class MaterialEditorApp:
 
         ttk.Button(cam_win, text="Apply Changes", command=self.restart_blender_daemon).pack(pady=10)
 
-    def restart_blender_daemon(self):
-        if self.daemon_process:
-            try:
-                self.daemon_process.terminate()
-            except Exception:
-                pass
-        self.launch_blender_daemon()
-
     def set_custom_preview_model(self):
         if not self.working_dir:
             messagebox.showwarning("No Project", "Open or create a project first.")
@@ -386,21 +376,6 @@ class MaterialEditorApp:
                 f.write(os.path.basename(filepath))
 
             messagebox.showinfo("Preview Model Set", f"Using model: {os.path.basename(filepath)}\nRestart Blender to see changes.")
-
-    def save_blender_path(self):
-        if not self.working_dir:
-            return
-        path = os.path.join(self.working_dir, CONFIG_FILENAME)
-        with open(path, "w") as f:
-            f.write(self.blender_path)
-
-    def load_blender_path(self):
-        if not self.working_dir:
-            return
-        path = os.path.join(self.working_dir, CONFIG_FILENAME)
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                self.blender_path = f.read().strip()
 
     def refresh_all_previews(self):
         if not self.materials or not self.working_dir:
@@ -487,6 +462,9 @@ class MaterialEditorApp:
         self.material_listbox.selection_set(self.material_listbox.get_children()[index])
         self.material_listbox.focus(self.material_listbox.get_children()[index])
         self.on_material_select()
+        self.on_material_select()
+        
+        self.on_material_select()    
         
 
     def new_project(self):
@@ -498,13 +476,13 @@ class MaterialEditorApp:
             # Get the selected item ID
             selected_item = self.material_listbox.selection()[0]
 
-
         os.makedirs(os.path.join(self.working_dir, "textures"), exist_ok=True)
         os.makedirs(os.path.join(self.working_dir, "exports"), exist_ok=True)
         os.makedirs(os.path.join(self.working_dir, "materials"), exist_ok=True)  # New folder for material-specific folders
 
-        self.load_blender_path()
-        self.launch_blender_daemon()
+        self.blender_path = blender_utils.load_blender_path(self.working_dir)
+        self.daemon_process, self.blender_pid_path = blender_utils.launch_blender_daemon(self.blender_path, self.working_dir)  
+
         messagebox.showinfo("New Project", "New project initialized. You can now add materials.")
 
     def load_project_materials(self):
@@ -549,8 +527,11 @@ class MaterialEditorApp:
 
 
 
-        self.load_blender_path()
-        self.launch_blender_daemon()
+        self.blender_path = blender_utils.load_blender_path(self.working_dir)
+
+        self.daemon_process, self.blender_pid_path = blender_utils.launch_blender_daemon(
+    self.blender_path, self.working_dir
+)
 
     def save_csv(self):
         if not self.working_dir:
@@ -587,8 +568,6 @@ class MaterialEditorApp:
         self.material_listbox.focus(item_id)
 
         self.on_material_select()
-
-
 
     def save_current_material(self):
         if self.current_index is None:
@@ -653,7 +632,6 @@ class MaterialEditorApp:
                 print("❌ Failed to save final preview:", e)
 
         threading.Thread(target=wait_then_copy, daemon=True).start()
-
 
     def render_preview(self):
         if not self.working_dir or self.current_index is None:
@@ -729,7 +707,6 @@ class MaterialEditorApp:
 
         threading.Thread(target=wait_for_render, daemon=True).start()
 
-
     def export_to_unity(self):
         if self.current_index is None:
             messagebox.showinfo("Export", "Select a material first.")
@@ -758,65 +735,8 @@ class MaterialEditorApp:
                 if tex_file:
                     f.write(f"mat.SetTexture(\"_{tex_var}\", Resources.Load<Texture2D>(\"textures/{tex_file}\"));\n")
 
-    def launch_blender_daemon(self):
-        if not self.blender_path or not self.working_dir:
-            return
-
-        if not os.path.isfile(self.blender_path):
-            messagebox.showerror("Blender Error", f"Blender executable not found at:\n{self.blender_path}")
-            return
-
-        blend_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "preview.blend")
-        daemon_script = os.path.join(os.path.dirname(os.path.dirname(__file__)),"src", "blender_daemon.py")
-
-        print(f"🔍 Blender path: {self.blender_path}")
-        print(f"🔍 Exists? {os.path.exists(self.blender_path)}")
-        print(f"🔍 Blend file: {blend_file}")
-        print(f"🔍 Daemon script: {daemon_script}")
-
-        # Launch Blender via .bat file on Windows, or directly on other platforms
-        if platform.system() == "Windows":
-            bat_path = os.path.join(os.path.dirname(__file__), "start_blender_daemon.bat")
-            process = subprocess.Popen([
-                bat_path,
-                self.blender_path,
-                blend_file,
-                daemon_script
-            ], shell=True)
-            if os.path.exists(bat_path):
-                process = subprocess.Popen(bat_path, shell=True)
-            else:
-                messagebox.showerror("Missing .bat File", f"Expected to find: {bat_path}")
-                return
-        else:
-            process = subprocess.Popen([
-                self.blender_path, "-b", blend_file, "--python", daemon_script
-            ])
-
-        self.daemon_process = process
-        self.blender_pid_path = os.path.join(self.working_dir, "blender_pid.txt")
-
-        # Save PID
-        with open(self.blender_pid_path, "w") as f:
-            f.write(str(process.pid))
-
     def on_close(self):
-        # Kill Blender process if running
-        if self.blender_pid_path and os.path.exists(self.blender_pid_path):
-            try:
-                with open(self.blender_pid_path, "r") as f:
-                    pid = int(f.read().strip())
-
-                system = platform.system()
-                if system == "Windows":
-                    subprocess.call(["taskkill", "/PID", str(pid), "/F"])
-                else:
-                    subprocess.call(["kill", "-9", str(pid)])
-
-                os.remove(self.blender_pid_path)
-            except Exception as e:
-                print(f"⚠️ Could not terminate Blender daemon: {e}")
-
+        blender_utils.kill_blender_daemon(self.blender_pid_path)
         self.root.destroy()
 
     def set_blender_path(self):

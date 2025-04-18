@@ -1,1 +1,1 @@
-E:\2025\3DMaterialEditor\MyProject\blender-4.4.0-windows-x64\blender.exe
+/Applications/Blender.app/Contents/MacOS/Blender
