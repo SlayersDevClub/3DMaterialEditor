@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 620f33e6c1e0f4c4082b40d5f3b3c0cf, type: 3}
+  m_Name: partinfo
+  m_EditorClassIdentifier: 
+  id: part-info
+  shellTemplate: {fileID: 9197481963319205126, guid: 2c55ae88653b7405daa2d2f1a9ede1ee, type: 3}
+  dragHandleName: drag-handle
+  centerOnShow: 1
+  contentTemplate: {fileID: 9197481963319205126, guid: e1757350ce5314174912ef2e84a5d5b7, type: 3}
+  controllerPrefab: {fileID: 3589397504318738551, guid: c319d45109ebc4cc5ae4f3684fbe95c2, type: 3}
+  initialWidth: 450
+  initialHeight: 500
+  windowTitle: Part Information
+  description: Various data points about a given view/part.
+  startHidden: 0
